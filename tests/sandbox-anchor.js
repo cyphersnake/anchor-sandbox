@@ -9,7 +9,11 @@ describe('sandbox-anchor', () => {
 
   it('Is initialized!', async () => {
     const program = anchor.workspace.SandboxAnchor;
-    const tx = await program.rpc.init(Array.from([Buffer.from([1, 2, 1]), Buffer.from([1, 2, 2]), Buffer.from([1, 2, 3])]), { 
+    const tx = await program.rpc.init(Array.from([
+        Buffer.from([1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,]),
+        Buffer.from([1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,]),
+        Buffer.from([1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,]),
+    ]), { 
         accounts: {
             authority: provider.wallet.publicKey
         },
