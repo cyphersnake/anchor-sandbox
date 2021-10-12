@@ -6,19 +6,9 @@ describe('sandbox-anchor', () => {
   anchor.setProvider(anchor.Provider.env());
 
   const provider = anchor.Provider.local();
+  const program = anchor.workspace.SandboxAnchor;
 
   it('Is initialized!', async () => {
-    const program = anchor.workspace.SandboxAnchor;
-    const tx = await program.rpc.init(Array.from([
-        Buffer.from([1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,]),
-        Buffer.from([1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,]),
-        Buffer.from([1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,]),
-    ]), { 
-        accounts: {
-            authority: provider.wallet.publicKey
-        },
-        signers: [ provider.wallet.payer ]
-    });
-    console.log("Your transaction signature", tx);
+      // TODO Create a test that verifies that the instructions passed contain exactly what they should
   });
 });
