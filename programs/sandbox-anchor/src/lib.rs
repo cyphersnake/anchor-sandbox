@@ -15,7 +15,9 @@ struct Initialized {
 #[program]
 pub mod sandbox_anchor_ {
     use super::*;
-    pub fn init(ctx: Context<Initialize>, msg: Vec<u8>) -> ProgramResult {
+
+    pub fn initialize(ctx: Context<Initialize>, msg: Vec<u8>) -> ProgramResult {
+        msg!("SANDBOX");
         emit!(Initialized {
             addresses: ctx
                 .accounts
@@ -170,30 +172,6 @@ impl<'info> Initialize<'info> {
                 .ok_or(Errors::InvalidVerificationSignatureKey.into())
         })
         .collect::<Result<_>>()?)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use libsecp256k1::PublicKey;
-
-    use super::*;
-    #[test]
-    fn test() {
-        use libsecp256k1::SecretKey;
-        use solana_sdk::secp256k1_instruction;
-
-        let mut rng = rand::thread_rng();
-        let sk = SecretKey::random(&mut rng);
-        let pk = PublicKey::from_secret_key(&sk);
-        let instruction = secp256k1_instruction::new_secp256k1_instruction(&sk, &[100u8; 100]);
-        assert!(
-            EcrecoverInstruction::deserialize(&mut instruction.data.as_slice())
-                .expect("Failed to deserialize")
-                .signatures[0]
-                .address
-                .eq(&secp256k1_instruction::construct_eth_pubkey(&pk))
-        );
     }
 }
 
