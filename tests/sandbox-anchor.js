@@ -7,21 +7,7 @@ const { sha256 } = require("js-sha256");
 const {struct, u8, u16, u32, blob} = require("@solana/buffer-layout");
 const {Buffer} = require('buffer');
 
-function hexdump(buffer, blockSize) {
-	
-	if(typeof buffer === 'string'){
-		//do nothing
-	}else if(buffer instanceof ArrayBuffer && buffer.byteLength !== undefined){
-		buffer = String.fromCharCode.apply(String, [].slice.call(new Uint8Array(buffer)));
-	}else if(Array.isArray(buffer)){
-		buffer = String.fromCharCode.apply(String, buffer);
-	}else if (buffer.constructor === Uint8Array) {
-		buffer = String.fromCharCode.apply(String, [].slice.call(buffer));
-	}else{
-		console.log("Error: buffer is unknown...");
-		return false;
-	}
-	
+function buf_hexdump(buffer, blockSize) {
     
 	blockSize = blockSize || 16;
     var lines = [];
@@ -29,20 +15,16 @@ function hexdump(buffer, blockSize) {
     for (var b = 0; b < buffer.length; b += blockSize) {
         var block = buffer.slice(b, Math.min(b + blockSize, buffer.length));
         var addr = ("0000" + b.toString(16)).slice(-4);
-        var codes = block.split('').map(function (ch) {
-            var code = ch.charCodeAt(0);
-            return " " + hex[(0xF0 & code) >> 4] + hex[0x0F & code];
-        }).join("");
+        var codes = Array.from(block).map( ch => " " + hex[(0xF0 & ch) >> 4] + hex[0x0F & ch]).join("");
         codes += "   ".repeat(blockSize - block.length);
-        var chars = block.replace(/[\x00-\x1F\x20]/g, '.');
+        var chars = block.toString().replace(/[\x00-\x1F\x20]/g, '.');
         chars +=  " ".repeat(blockSize - block.length);
         lines.push(addr + " " + codes + "  " + chars);
     }
     return lines.join("\n");
 }
 
-function MsgsToInstructionData(messages) {
-  // TODO: fix multiple messages broken offset
+function MsgsToInstructionData(messages, instr_index) {
   
   const START_OFFSET = 1;
   const PUBKEY_SIZE = 20;
@@ -58,20 +40,21 @@ function MsgsToInstructionData(messages) {
   ]);
 
   let sigStruct = struct([
-    blob(PUBKEY_SIZE, 'pubkey'),
     blob(64, 'signature'),
     u8('recid'),
+    blob(PUBKEY_SIZE, 'pubkey'),
   ]);
 
-  let BUFFER_SIZE = 1 + // messages count
+  let BUFFER_SIZE = START_OFFSET + // messages count
   secpStruct.span * messages.length + // headers * messages count
   sigStruct.span * messages.length + // signatures * messages count
+  //messages[0].msg.length - may be adappted to compact variant
   messages.reduce((total, msg) => total + msg.msg.length, 0) // messages total length
 
-  console.log(`Allocating buffer of size: ${BUFFER_SIZE}`)
+  // console.log(`Allocating buffer of size: ${BUFFER_SIZE}`)
 
   let DATA_OFFSET = secpStruct.span * messages.length + START_OFFSET;
-  console.log(`Data offset: ${START_OFFSET}`);
+  // console.log(`Data offset: ${DATA_OFFSET}`);
 
   let instruction = Buffer.alloc(BUFFER_SIZE)
   instruction[0] = messages.length
@@ -80,18 +63,20 @@ function MsgsToInstructionData(messages) {
 
   messages.reduce((acc, message, index) => {
 
+    //console.log(`[Filling header #${index}] Current offset: ${acc.offset}, header offset: ${secpStruct.span*index+START_OFFSET}`)
+    
     // fill header
     secpStruct.encode({
-      secp_signature_offset: acc.offset + PUBKEY_SIZE,
-      secp_instruction_index: index,
-      secp_pubkey_offset: acc.offset,
-      secp_pubkey_instruction_index: index,
-      secp_message_data_offset: acc.offset + sigStruct.span,
+      secp_signature_offset: acc.offset,
+      secp_instruction_index: instr_index,
+      secp_pubkey_offset: acc.offset+65,
+      secp_pubkey_instruction_index: instr_index,
+      secp_message_data_offset: acc.offset + sigStruct.span,//BUFFER_SIZE-message.msg.length - may be adapted to compact variant
       secp_message_data_size: message.msg.length,
-      secp_message_instruction_index: index,
+      secp_message_instruction_index: instr_index,
     }, acc.buffer, secpStruct.span*index+START_OFFSET);
 
-    console.log(`[Filled header #${index}] Current offset: ${acc.offset}`)
+    //console.log(`[Filled header #${index}] Current offset: ${acc.offset}`)
 
     // fill signature
     sigStruct.encode({
@@ -101,13 +86,16 @@ function MsgsToInstructionData(messages) {
     }, acc.buffer, acc.offset);
     acc.offset += sigStruct.span;
 
-    console.log(`[Filled signature #${index}, recid: ${message.recid}] Current offset: ${acc.offset}`)
+    //console.log(`[Filled signature #${index}, recid: ${message.recid}] Current offset: ${acc.offset}`)
 
-    // fill message
+    //if (index===messages.length-1) { - may be adapted to compact varaint
+      // fill message
+    //}
+    
     blob(message.msg.length).encode(message.msg, acc.buffer, acc.offset);
     acc.offset += message.msg.length;
 
-    console.log(`[Filled message ${index}] Current offset: ${acc.offset}`)
+    //console.log(`[Filled message ${index}] Current offset: ${acc.offset}`)
 
     return acc;
   }, result);
@@ -130,9 +118,9 @@ function CreateSignedMsg(message, signer) {
   }
 }
 
-function CreateMsgWithMulipleSigs(message, signers) {
+function CreateMsgWithMulipleSigs(message, signers, instr_index) {
   return MsgsToInstructionData(
-    Array.from(signers, signer => CreateSignedMsg(message, signer))
+    Array.from(signers, signer => CreateSignedMsg(message, signer), instr_index)
   )
 }
 
@@ -152,7 +140,7 @@ function CreateSigner() {
 
 function sbxInstrData(message) {
 
-    let name = snakeCase('init');
+    let name = snakeCase('initialize');
     let method = Buffer.from(sha256.digest(`global:${name}`)).slice(0, 8)
 
     methStruct = struct([
@@ -180,8 +168,7 @@ function defaultSecp256(message, signer) {
   );
   
   let ethPubkey = anchor.web3.Secp256k1Program.publicKeyToEthAddress(signer.publicKey).toString('hex');
-  console.log(`--------\nsignature: \n${hexdump(signature)}\n\neth pubkey: ${ethPubkey}\nrecid: ${recoveryId}--------`);
-
+  
   // Create transaction to verify the signature
   let instr = anchor.web3.Secp256k1Program.createInstructionWithEthAddress({
       ethAddress: ethPubkey,
@@ -196,26 +183,19 @@ function defaultSecp256(message, signer) {
 describe('sandbox-anchor', () => {
 
   // Configure the client to use the local cluster.
-  anchor.setProvider(anchor.Provider.env());
 
-  const provider = anchor.Provider.local();
+  const provider = anchor.Provider.env();
+  anchor.setProvider(provider);
+
   const program = anchor.workspace.SandboxAnchor;
 
-  it('Is initialized!', async () => {
-      // TODO Create a test that verifies that the instructions passed contain exactly what they should
-    
-    /*
-      let result = await program.rpc.init(Buffer.from("test"), {
-      accounts: {
-        instruction: TOKEN_PROGRAM_ID,
-      }
-    });
-    */
-
-
+  let programPk = new anchor.web3.PublicKey("9DxrDu7MwthUNerqq3VYKksSWugck2sa8y27q4y6nrAj");
+  
+  it('Checks if default secp256k1 works fine', async () => {
     let signers = [CreateSigner()];
-    let message = "test6789679869876896";
-    let signed = CreateMsgWithMulipleSigs(message, signers);
+    let message = "test_default";
+    let signed = CreateMsgWithMulipleSigs(message, signers, 0);
+    
     let secp_instr = new anchor.web3.TransactionInstruction({
       data: signed, 
       programId: anchor.web3.Secp256k1Program.programId,
@@ -224,22 +204,97 @@ describe('sandbox-anchor', () => {
 
     let sbx_instr = new anchor.web3.TransactionInstruction({
       data: sbxInstrData(Buffer.from(message)),
-      programId: new anchor.web3.PublicKey("wSbxEEzm4nf96TjftqNYbxEzGvszuPM1qdrmU42S8QF"),
+      programId: programPk,
+      keys: [
+        { isSigner: 0, isWritable: 0, pubkey: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY },
+      ],
+    });
+
+    let trans = defaultSecp256(message, signers[0]);
+
+    trans
+    .add(sbx_instr);
+
+    let listener = null
+    let [event, slot] = await new Promise((resolve, _reject) => {
+      listener = program.addEventListener("Initialized", (event, slot) => {
+        resolve([event, slot]);
+      });
+      
+      program.provider.send(trans)
+    });
+    await program.removeEventListener(listener);
+    console.log(event, slot);
+  });
+
+  it('Checks if custom secp256k1with one signature works fine', async () => {
+    let signers = [CreateSigner()];
+    let message = "test_custom_single";
+    let signed = CreateMsgWithMulipleSigs(message, signers, 0);
+    
+    let secp_instr = new anchor.web3.TransactionInstruction({
+      data: signed, 
+      programId: anchor.web3.Secp256k1Program.programId,
       keys: []
     });
 
-    let def_trans = defaultSecp256(message, signers[0]);
+    let sbx_instr = new anchor.web3.TransactionInstruction({
+      data: sbxInstrData(Buffer.from(message)),
+      programId: programPk,
+      keys: [
+        { isSigner: 0, isWritable: 0, pubkey: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY },
+      ],
+    });
 
     let trans = new anchor.web3.Transaction()
-    .add(def_trans.instructions[0])
+    .add(secp_instr)
     .add(sbx_instr);
 
-    console.log(hexdump(trans.instructions[0].data.toString()));
-    console.log(hexdump(def_trans.instructions[0].data.toString()))
-
-    console.log(trans)
-
-    await anchor.web3.sendAndConfirmTransaction(provider.connection, trans, [provider.wallet.publicKey]);
-
+    let listener = null
+    let [event, slot] = await new Promise((resolve, _reject) => {
+      listener = program.addEventListener("Initialized", (event, slot) => {
+        resolve([event, slot]);
+      });
+      
+      program.provider.send(trans)
     });
+    await program.removeEventListener(listener);
+    console.log(event, slot);
+  });
+
+  it('Checks if custom secp256k1 with multiple signatures works fine', async () => {
+    let signers = [CreateSigner(), CreateSigner()];
+    let message = "test_custom_multiple";
+    let signed = CreateMsgWithMulipleSigs(message, signers, 0);
+    
+    let secp_instr = new anchor.web3.TransactionInstruction({
+      data: signed, 
+      programId: anchor.web3.Secp256k1Program.programId,
+      keys: []
+    });
+
+    let sbx_instr = new anchor.web3.TransactionInstruction({
+      data: sbxInstrData(Buffer.from(message)),
+      programId: programPk,
+      keys: [
+        { isSigner: 0, isWritable: 0, pubkey: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY },
+      ],
+    });
+
+    let trans = new anchor.web3.Transaction()
+    .add(secp_instr)
+    .add(sbx_instr);
+
+    let listener = null
+    let [event, slot] = await new Promise((resolve, _reject) => {
+      listener = program.addEventListener("Initialized", (event, slot) => {
+        resolve([event, slot]);
+      });
+      
+      program.provider.send(trans)
+    });
+    await program.removeEventListener(listener);
+    console.log(event, slot);
+  })
+
 });
