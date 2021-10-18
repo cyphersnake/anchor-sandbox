@@ -192,7 +192,7 @@ describe('sandbox-anchor', () => {
     });
 
     let sbxInstr = new anchor.web3.TransactionInstruction({
-      data: programPK(Buffer.from(message)),
+      data: SbxInstructionData(Buffer.from(message)),
       programId: programPK,
       keys: [
         { isSigner: 0, isWritable: 0, pubkey: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY },
