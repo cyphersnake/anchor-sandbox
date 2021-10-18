@@ -7,24 +7,7 @@ const { sha256 } = require("js-sha256");
 const {struct, u8, u16, u32, blob} = require("@solana/buffer-layout");
 const {Buffer} = require('buffer');
 
-function buf_hexdump(buffer, blockSize) {
-    
-	blockSize = blockSize || 16;
-    var lines = [];
-    var hex = "0123456789ABCDEF";
-    for (var b = 0; b < buffer.length; b += blockSize) {
-        var block = buffer.slice(b, Math.min(b + blockSize, buffer.length));
-        var addr = ("0000" + b.toString(16)).slice(-4);
-        var codes = Array.from(block).map( ch => " " + hex[(0xF0 & ch) >> 4] + hex[0x0F & ch]).join("");
-        codes += "   ".repeat(blockSize - block.length);
-        var chars = block.toString().replace(/[\x00-\x1F\x20]/g, '.');
-        chars +=  " ".repeat(blockSize - block.length);
-        lines.push(addr + " " + codes + "  " + chars);
-    }
-    return lines.join("\n");
-}
-
-function MsgsToInstructionData(messages, instr_index) {
+function MsgsToInstructionData(messages, instructionIndex) {
   
   const START_OFFSET = 1;
   const PUBKEY_SIZE = 20;
@@ -45,17 +28,12 @@ function MsgsToInstructionData(messages, instr_index) {
     blob(PUBKEY_SIZE, 'pubkey'),
   ]);
 
-  let BUFFER_SIZE = START_OFFSET + // messages count
-  secpStruct.span * messages.length + // headers * messages count
-  sigStruct.span * messages.length + // signatures * messages count
-  //messages[0].msg.length - may be adappted to compact variant
-  messages.reduce((total, msg) => total + msg.msg.length, 0) // messages total length
-
-  // console.log(`Allocating buffer of size: ${BUFFER_SIZE}`)
+  let BUFFER_SIZE = START_OFFSET +
+  secpStruct.span * messages.length +
+  sigStruct.span * messages.length +
+  messages.reduce((total, msg) => total + msg.msg.length, 0) 
 
   let DATA_OFFSET = secpStruct.span * messages.length + START_OFFSET;
-  // console.log(`Data offset: ${DATA_OFFSET}`);
-
   let instruction = Buffer.alloc(BUFFER_SIZE)
   instruction[0] = messages.length
 
@@ -63,40 +41,26 @@ function MsgsToInstructionData(messages, instr_index) {
 
   messages.reduce((acc, message, index) => {
 
-    //console.log(`[Filling header #${index}] Current offset: ${acc.offset}, header offset: ${secpStruct.span*index+START_OFFSET}`)
-    
-    // fill header
     secpStruct.encode({
       secp_signature_offset: acc.offset,
-      secp_instruction_index: instr_index,
+      secp_instruction_index: instructionIndex,
       secp_pubkey_offset: acc.offset+65,
-      secp_pubkey_instruction_index: instr_index,
-      secp_message_data_offset: acc.offset + sigStruct.span,//BUFFER_SIZE-message.msg.length - may be adapted to compact variant
+      secp_pubkey_instruction_index: instructionIndex,
+      secp_message_data_offset: acc.offset + sigStruct.span,
       secp_message_data_size: message.msg.length,
-      secp_message_instruction_index: instr_index,
+      secp_message_instruction_index: instructionIndex,
     }, acc.buffer, secpStruct.span*index+START_OFFSET);
 
-    //console.log(`[Filled header #${index}] Current offset: ${acc.offset}`)
-
-    // fill signature
     sigStruct.encode({
       signature: message.sig,
       recid: message.recid,
       pubkey: message.ethPubkey
     }, acc.buffer, acc.offset);
     acc.offset += sigStruct.span;
-
-    //console.log(`[Filled signature #${index}, recid: ${message.recid}] Current offset: ${acc.offset}`)
-
-    //if (index===messages.length-1) { - may be adapted to compact varaint
-      // fill message
-    //}
     
     blob(message.msg.length).encode(message.msg, acc.buffer, acc.offset);
     acc.offset += message.msg.length;
-
-    //console.log(`[Filled message ${index}] Current offset: ${acc.offset}`)
-
+    
     return acc;
   }, result);
 
@@ -118,9 +82,9 @@ function CreateSignedMsg(message, signer) {
   }
 }
 
-function CreateMsgWithMulipleSigs(message, signers, instr_index) {
+function CreateMsgWithMulipleSigs(message, signers, instructionIndex) {
   return MsgsToInstructionData(
-    Array.from(signers, signer => CreateSignedMsg(message, signer), instr_index)
+    Array.from(signers, signer => CreateSignedMsg(message, signer), instructionIndex)
   )
 }
 
@@ -138,7 +102,7 @@ function CreateSigner() {
   }
 }
 
-function sbxInstrData(message) {
+function SbxInstructionData(message) {
 
     let name = snakeCase('initialize');
     let method = Buffer.from(sha256.digest(`global:${name}`)).slice(0, 8)
@@ -159,7 +123,7 @@ function sbxInstrData(message) {
     return buffer
 }
 
-function defaultSecp256(message, signer) {
+function DefaultSecp256(message, signer) {
   let plaintext = Buffer.from(message);
   let plaintextHash = Buffer.from(keccak_256.update(plaintext).digest());
   let {signature, recid: recoveryId} = secp256k1.ecdsaSign(
@@ -169,7 +133,6 @@ function defaultSecp256(message, signer) {
   
   let ethPubkey = anchor.web3.Secp256k1Program.publicKeyToEthAddress(signer.publicKey).toString('hex');
   
-  // Create transaction to verify the signature
   let instr = anchor.web3.Secp256k1Program.createInstructionWithEthAddress({
       ethAddress: ethPubkey,
       message: plaintext,
@@ -182,39 +145,29 @@ function defaultSecp256(message, signer) {
 
 describe('sandbox-anchor', () => {
 
-  // Configure the client to use the local cluster.
-
   const provider = anchor.Provider.env();
   anchor.setProvider(provider);
 
   const program = anchor.workspace.SandboxAnchor;
 
-  let programPk = new anchor.web3.PublicKey("9DxrDu7MwthUNerqq3VYKksSWugck2sa8y27q4y6nrAj");
+  let programPK = new anchor.web3.PublicKey("9DxrDu7MwthUNerqq3VYKksSWugck2sa8y27q4y6nrAj");
   
   it('Checks if default secp256k1 works fine', async () => {
-    let signers = [CreateSigner()];
+    let signer = CreateSigner();
     let message = "test_default";
-    let signed = CreateMsgWithMulipleSigs(message, signers, 0);
-    
-    let secp_instr = new anchor.web3.TransactionInstruction({
-      data: signed, 
-      programId: anchor.web3.Secp256k1Program.programId,
-      keys: []
-    });
 
-    let sbx_instr = new anchor.web3.TransactionInstruction({
-      data: sbxInstrData(Buffer.from(message)),
-      programId: programPk,
+    let sbxInstr = new anchor.web3.TransactionInstruction({
+      data: SbxInstructionData(Buffer.from(message)),
+      programId: programPK,
       keys: [
         { isSigner: 0, isWritable: 0, pubkey: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY },
       ],
     });
 
-    let trans = defaultSecp256(message, signers[0]);
+    let trans = DefaultSecp256(message, signer)
+    .add(sbxInstr);
 
-    trans
-    .add(sbx_instr);
-
+    // TODO: fix event listener
     let listener = null
     let [event, slot] = await new Promise((resolve, _reject) => {
       listener = program.addEventListener("Initialized", (event, slot) => {
@@ -232,24 +185,25 @@ describe('sandbox-anchor', () => {
     let message = "test_custom_single";
     let signed = CreateMsgWithMulipleSigs(message, signers, 0);
     
-    let secp_instr = new anchor.web3.TransactionInstruction({
+    let secpInstr = new anchor.web3.TransactionInstruction({
       data: signed, 
       programId: anchor.web3.Secp256k1Program.programId,
       keys: []
     });
 
-    let sbx_instr = new anchor.web3.TransactionInstruction({
-      data: sbxInstrData(Buffer.from(message)),
-      programId: programPk,
+    let sbxInstr = new anchor.web3.TransactionInstruction({
+      data: programPK(Buffer.from(message)),
+      programId: programPK,
       keys: [
         { isSigner: 0, isWritable: 0, pubkey: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY },
       ],
     });
 
     let trans = new anchor.web3.Transaction()
-    .add(secp_instr)
-    .add(sbx_instr);
+    .add(secpInstr)
+    .add(sbxInstr);
 
+    // TODO: fix event listener
     let listener = null
     let [event, slot] = await new Promise((resolve, _reject) => {
       listener = program.addEventListener("Initialized", (event, slot) => {
@@ -267,24 +221,25 @@ describe('sandbox-anchor', () => {
     let message = "test_custom_multiple";
     let signed = CreateMsgWithMulipleSigs(message, signers, 0);
     
-    let secp_instr = new anchor.web3.TransactionInstruction({
+    let secpInstr = new anchor.web3.TransactionInstruction({
       data: signed, 
       programId: anchor.web3.Secp256k1Program.programId,
       keys: []
     });
 
-    let sbx_instr = new anchor.web3.TransactionInstruction({
+    let sbxInstr = new anchor.web3.TransactionInstruction({
       data: sbxInstrData(Buffer.from(message)),
-      programId: programPk,
+      programId: programPK,
       keys: [
         { isSigner: 0, isWritable: 0, pubkey: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY },
       ],
     });
 
     let trans = new anchor.web3.Transaction()
-    .add(secp_instr)
-    .add(sbx_instr);
+    .add(secpInstr)
+    .add(sbxInstr);
 
+    // TODO: fix event listener
     let listener = null
     let [event, slot] = await new Promise((resolve, _reject) => {
       listener = program.addEventListener("Initialized", (event, slot) => {
